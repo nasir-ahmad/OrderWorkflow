@@ -1,0 +1,230 @@
+<?php
+/**
+ * Copyright © 2015 DIT. All rights reserved.
+ */
+
+namespace DIT\OrderWorkflow\Model;
+
+class Cron extends \Magento\Framework\Model\AbstractModel {
+	const DEBUG_MODE = true;
+
+	//Steps of SS order statuses and their priorities
+	const SS_ORDER_STEP_CANCELLED = -1;
+	const SS_ORDER_STEP_ON_HOLD = 0;
+	const SS_ORDER_STEP_AWAITING_PAYMENT = 1;
+	const SS_ORDER_STEP_PENDING_FULFILLMENT = 2;
+	const SS_ORDER_STEP_AWAITING_SHIPMENT = 3;
+	const SS_ORDER_STEP_SHIPPED = 4;
+
+	public function __construct(
+		\DIT\OrderWorkflow\Model\Shipstation\Api $ssApi,
+		\DIT\OrderWorkflow\Model\Shipstation\Order $ssOrder,
+		\DIT\OrderWorkflow\Model\Printful\Api\Adapter $pfApi,
+		\Magento\Sales\Model\OrderFactory $orderFactory,
+		\Psr\Log\LoggerInterface $logger
+	){
+		$this->_ssApi = $ssApi;
+		$this->_pfApi = $pfApi;
+		$this->_orderFactory = $orderFactory;
+		$this->_ssOrder = $ssOrder;
+		$this->_logger = $logger;
+	}
+
+	private function _log($msg){
+		$this->_logger->debug($msg);
+
+		if (self::DEBUG_MODE){
+			echo "<pre>" . $msg . "</pre>";
+		}
+
+		return $this;
+	}
+
+	private function _getOrderStep($ssOrder){
+
+		$statusList = array(
+			'cancelled' => self::SS_ORDER_STEP_CANCELLED,
+			'on_hold' => self::SS_ORDER_STEP_ON_HOLD,
+			'awaiting_payment' => self::SS_ORDER_STEP_AWAITING_PAYMENT,
+			'pending_fulfillment' => self::SS_ORDER_STEP_PENDING_FULFILLMENT,
+			'awaiting_shipment' => self::SS_ORDER_STEP_AWAITING_SHIPMENT,
+			'shipped' => self::SS_ORDER_STEP_SHIPPED
+		);
+
+		$status = $ssOrder['orderStatus'];
+		if(isset($statusList[$status])){
+			return $statusList[$status];
+		}
+
+		return false;
+	}
+
+
+    public function shipstationImportOrder()
+    {
+		$this->_log('================ Initializing Shipstation Import CRON Job ================');
+
+		$startDate = date('Y-m-d H:i:s', strtotime('-2 days'));
+		$endDate = date('Y-m-d H:i:s');
+		$this->_log('Fetching ShipStation orders between ' . $startDate . ' and ' . $endDate . ' ...');
+		$ssOrders = $this->_ssApi->listOrders(array('modifyDateStart' => $startDate, 'modifyDateEnd' => $endDate));
+
+		//Find the list of ShipStation orders that are already available in Magento and ignore those
+		$ssOrderIds = array();
+		foreach($ssOrders['orders'] as $o){
+			$ssOrderIds[] = $o['orderNumber']; //OrderNumber is the Magento increment_id
+		}
+		$this->_log('Fetched ShipStation Orders ' . implode(', ', $ssOrderIds));
+
+		foreach($ssOrders['orders'] as $ssOrder){
+			$this->_log('<<<<< Started import ShipStation order ' . $ssOrder['orderId']);
+
+			//Check whether the order was imported in Magento already
+			$existingOrder = $this->_orderFactory->create()->getCollection()
+										->addFieldToFilter(array(
+											'increment_id',
+											'shipstation_order_id',
+										), array(
+											$ssOrder['orderNumber'],
+											$ssOrder['orderId']
+										));
+
+			/**
+			  * Create the order if it doesnt exist already
+			  * Possible order statuses on SS are awaiting_payment , awaiting_shipment , pending_fulfillment , shipped , on_hold , cancelled .
+			  */
+			$order = null;
+
+			if ($existingOrder->getSize() > 0){
+				foreach($existingOrder as $o){
+					$order = $this->_orderFactory->create()->load($o->getId());
+
+					$this->_log('Already imported. Magento order ID #' . $o->getIncrementId() . '. SS order number ' . $ssOrder['orderNumber'] . ' status = ' . $ssOrder['orderStatus']);
+				}
+			} else {
+
+				//Import from ShipStation and create the order in Magento if it doesn't exist already
+				$this->_log('Importing ShipStation order... ' . $ssOrder['orderId']);
+				$this->_log(json_encode($ssOrder));
+
+				try {
+					$order = $this->_ssOrder->create($ssOrder);
+
+					if($order->getId()){
+						$this->_log('Created Magento order #' . $order->getIncrementId());
+
+						//Update Shipstation order and sync with Magento order number so that it doesn't get exported twice
+						$ssOrder['orderNumber'] = $order->getIncrementId();
+
+						//Set default store to Ampers and Sons if it's Manual Order on ShipStation
+						$storeMapping = $this->_ssOrder->getStoreMapping();
+						if (!in_array($ssOrder['advancedOptions']['storeId'], array_keys($storeMapping))){		//array_keys returns SS store ids and array_values returns Magento store ids
+							foreach($storeMapping as $ssStoreId => $mageStoreId){
+								$ssOrder['advancedOptions']['storeId'] = $ssStoreId;
+								break;
+							}
+						}
+
+						//$ssOrder['orderKey'] = $order->getIncrementId();	//Don't update "orderKey" as would create a new order in ShipStation
+
+						$this->_log('Requesting ShipStation API to update orderNumber with Order Increment ID #' . $ssOrder['orderNumber']);
+						$response = $this->_ssApi->createUpdateOrder($ssOrder);
+						$this->_log('API Response: ' . json_encode($response));
+						$this->_log('API Request complete.');
+
+						//Make sure the order number was really changed on ShipStation to make sure both systems are in sync
+						if ($response['orderNumber'] != $order->getIncrementId()){
+							throw new \Exception('Sync Failed. Unable to update order number of ShipStation order ' . $ssOrder['orderId']);
+						}
+					} else {
+						throw new \Exception('Unable to import ShipStation order... ' . $ssOrder['orderId']);
+					}
+				} catch (\Exception $ex){
+					$this->_log('ERROR: ' . $ex->getMessage());
+				}
+			}
+
+
+
+			try {
+				/**
+				  * Create invoice if the SS order was paid successfully
+				  *
+				  */
+				if(in_array($ssOrder['orderStatus'], array('awaiting_shipment', 'shipped'))){
+					$this->_log('Checking invoice for the order...');
+					if ($order->canInvoice()){
+						$invoice = $this->_ssOrder->createInvoice($order);
+						$this->_log('Created Magento invoice #' . $invoice->getIncrementId());
+					}
+				}
+
+				/**
+				  * Create shipment if the SS order was shipped
+				  *
+				  */
+				/*
+				if(in_array($ssOrder['orderStatus'], array('shipped'))){
+					$this->_log('Checking shipment for the order...');
+					$ssShipments = $this->_ssApi->listShipments(array('orderId' => $ssOrder['orderId']))['shipments'];
+					if ($order->canShip()){
+						if (count($ssShipments) > 0){
+							foreach($ssShipments as $ssShipment){
+								$this->_log('Fetched shipment for order #' . $order->getIncrementId());
+								$this->_log(json_encode($ssOrder));
+								
+								$shipment = $this->_ssOrder->createShipment($order, $ssOrder, $ssShipment);
+								if ($shipment){
+									$this->_log('Created Magento shipment #' . $shipment->getIncrementId());
+								} else {
+									throw new \Exception ('Unable to create Magento shipment due to missing information');
+								}
+							}
+						} else {
+							throw new \Exception ('No shipment found on ShipStation.');
+						}
+					}
+				}
+				*/
+
+			} catch (\Exception $ex){
+				$this->_log('ERROR: ' . $ex->getMessage());
+			}
+
+
+
+
+			$this->_log('>>>>> Ended ShipStation import of order ' . $ssOrder['orderId']);
+		}
+
+		$this->_log('================ CRON execution completed successfully ================');
+
+        return $this;
+    }
+
+	public function printfulExportOrders(){
+
+		$this->_log('================ Initializing Printful Export CRON Job ================');
+
+		//Check whether the order was imported in Magento already
+		$orderCollection = $this->_orderFactory->create()->getCollection()
+									->addFieldToFilter('state', array('in' => array('complete', 'processing')))
+									//->addFieldToFilter('increment_id', '000000054')
+									->addFieldToFilter('printful_is_exported', array('neq' => 1));
+
+		$orderCollection->getSelect()->limit(10);
+
+		foreach($orderCollection as $order){
+			$this->_log('<<<<< Sending export request for order #' . $order->getIncrementId());
+			try {
+				$response = $this->_pfApi->createOrder($order);
+				$this->_log('Received response ' . json_encode($response));
+			} catch (\Exception $ex){
+				$this->_log('ERROR: ' . $ex->getMessage());
+			}
+			$this->_log('>>>>> Ended export of order #' . $order->getIncrementId());
+		}
+
+		$this->_log('================ CRON execution completed successfully ================');
+	}
+}

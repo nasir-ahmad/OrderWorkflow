@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<!--
+/**
+ * Copyright © 2015 DIT. All rights reserved.
+ */
+-->
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../app/code/Magento/Cron/etc/crontab.xsd">
+    <group id="default">
+        <job name="orderworkflow_shipstation_import_order" instance="DIT\OrderWorkflow\Model\Cron" method="shipstationImportOrder">
+            <schedule>*/5 * * * *</schedule>
+        </job>
+        <job name="orderworkflow_printful_export_order" instance="DIT\OrderWorkflow\Model\Cron" method="printfulExportOrders">
+            <schedule>*/5 * * * *</schedule>
+        </job>		
+    </group>
+</config>

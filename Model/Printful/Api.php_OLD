@@ -1,0 +1,35 @@
+<?php
+
+namespace DIT\OrderWorkflow\Model\Printful;
+
+class Api {
+	const API_KEY = 'a3vsxpyo-91bv-07vi:6l9m-x7tsd1t0ahtm';
+	const API_ENDPOINT = 'https://api.theprintful.com';
+
+	protected $_ch;
+
+	public function __construct(
+	){
+		$this->_ch = curl_init();
+		curl_setopt($this->_ch, CURLOPT_HTTPHEADER, array('Authorization: Basic ' . base64_encode(self::API_KEY)));
+		curl_setopt($this->_ch, CURLOPT_RETURNTRANSFER, true);
+	}
+
+	public function __destruct(){
+		curl_close($this->_ch);
+	}
+
+	protected function _getEndpoint($resource){
+		return self::API_ENDPOINT . $resource;
+	}
+	
+	public function get($resource){
+		curl_setopt($this->_ch, CURLOPT_URL, $this->_getEndpoint($resource));
+		curl_setopt($this->_ch, CURLOPT_HTTPGET, true);
+		$response = json_decode(curl_exec($this->_ch), true);
+
+		return $response;	
+	
+	}
+}
+?>

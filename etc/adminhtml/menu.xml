@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../../Backend/etc/menu.xsd">
+    <menu>
+        <add id="dit::base" title="Order Workflow" module="DIT_OrderWorkflow" sortOrder="30" resource="DIT_OrderWorkflow::base"/>
+		
+		<add id="dit::manual_op" title="Manual Operations" module="DIT_OrderWorkflow" parent="dit::base" sortOrder="30" resource="DIT_OrderWorkflow::manual_op"/>
+		
+		<add id="dit::process_shipstation" title="Import from ShipStation" module="DIT_OrderWorkflow" sortOrder="10" parent="dit::manual_op" action="orderworkflow/process/shipstation" resource="DIT_OrderWorkflow::process_shipstation"/>
+		<add id="dit::process_printful" title="Export to Printful" module="DIT_OrderWorkflow" sortOrder="10" parent="dit::manual_op" action="orderworkflow/process/printful" resource="DIT_OrderWorkflow::process_printful"/>
+    </menu>
+</config>

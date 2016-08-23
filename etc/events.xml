@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:Event/etc/events.xsd">
+
+	<!--event name="controller_action_postdispatch_adminhtml_order_shipment_save">
+		<observer name="dit_orderworkflow_controller_action_postdispatch_adminhtml_order_shipment_save_handler" instance="DIT\OrderWorkflow\Observer\Export\Order" shared="true" />
+	</event-->
+	
+	
+	<!--event name="controller_action_predispatch_sales_shipment_print">
+		<observer name="dit_orderworkflow_controller_action_predispatch_sales_shipment_print_handler" instance="DIT\OrderWorkflow\Observer\Export\Order" shared="true" />
+	</event-->
+	
+	<event name="sales_order_invoice_pay">
+		<observer name="dit_orderworkflow_sales_order_invoice_pay_handler" instance="DIT\OrderWorkflow\Observer\SalesOrderInvoicePay" shared="true" />
+	</event>
+
+	<event name="catalog_product_save_before">
+		<observer name="dit_orderworkflow_catalog_product_save_before_handler" instance="DIT\OrderWorkflow\Observer\CatalogProductSaveBefore" shared="true" />
+	</event>
+	
+	<event name="printful_webhook_package_shipped">
+		<observer name="dit_orderworkflow_printful_webhook_package_shipped_handler" instance="DIT\OrderWorkflow\Observer\PrintfulWebhookPackageShipped" shared="true" />
+	</event>	
+</config>
